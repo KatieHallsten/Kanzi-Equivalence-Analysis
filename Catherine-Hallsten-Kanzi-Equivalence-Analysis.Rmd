@@ -1,0 +1,490 @@
+---
+title: "Analysis of Results for: *A case study of virtual reality equivalence in a delayed match-to-sample task with a language-trained bonobo (Pan paniscus)*"
+author: "Catherine Hallsten"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, fig.height = 4, message = FALSE)
+
+library(tidyverse)
+library(fs)
+library(readxl)
+library(here)
+library(parameters)
+library(broom)
+library(logistf)
+library(janitor)
+library(patchwork)
+library(knitr)
+library(slider)
+
+set.seed(2021-05-06)
+
+ex1ex2binom <- list()
+
+test_data <- read_csv(here("exp1_test_extra_data.csv"))%>% 
+  mutate(Modality = fct_relevel(Modality, c("Lex", "Pic", "3D")))
+```
+
+# Experiment 1
+
+## Section 2.1.1. Overall Accuracy
+
+```{r}
+plot_data <- test_data %>% 
+  group_by(Modality) %>% 
+  nest() %>% 
+  ungroup() %>% 
+  rename(DF = data) %>% 
+  mutate(binom_test = map(DF, ~ binom.test(sum(.x$Correctness), length(.x$Correctness)))) %>% 
+  mutate(binom_test = map(binom_test, tidy)) %>% 
+  unnest(binom_test) %>% 
+  select(-DF, -method, -alternative, -statistic, -parameter)
+
+ex1ex2binom[[1]] <- plot_data %>% 
+  mutate(Experiment = 1)
+
+plot_data %>% kable()
+```
+
+### Figure 8
+
+```{r}
+plot_data %>% 
+  rename(Accuracy = estimate) %>% 
+  ggplot(aes(Modality, Accuracy)) +
+  geom_col(fill =  scales::hue_pal()(3)) + 
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = .25)
+```
+
+## Section 2.1.2.	First Trial Accuracy
+
+```{r}
+fts <- read_xlsx(here("first-trial-success.xlsx")) 
+
+fts1_tbl <- tribble(
+  ~Correct, ~Total, ~"p-Value",
+  fts %>% 
+    slice(1:6) %>%
+    pull(Correctness) %>% sum(), 
+  fts %>% 
+    slice(1:6) %>%
+    pull(Correctness) %>% 
+    length(),
+  fts %>% 
+    slice(1:6) %>%
+    pull(Correctness) %>% 
+    {binom.test(sum(.), length(.))} %>% 
+    .$p.value
+)
+
+fts2_tbl <- tribble(
+  ~Correct, ~Total, ~"p-Value",
+  fts %>% 
+    pull(Correctness) %>% sum(), 
+  fts %>% 
+    pull(Correctness) %>% length(),
+  fts %>% 
+    pull(Correctness) %>% 
+    {binom.test(sum(.), length(.))} %>% 
+    .$p.value
+)
+```
+
+first-trial accuracy for each first pair exposure:
+
+```{r}
+fts1_tbl %>% kable()
+```
+
+first trial accuracy for each matching word:
+
+```{r}
+fts2_tbl %>% kable()
+```
+
+## 2.1.3.	Accuracy Compared Across Conditions
+
+### Table 1
+
+```{r}
+(modality_model <- logistf(Correctness ~ Modality, data = test_data, family = "binomial")) %>% 
+  parameters::parameters(exponentiate = TRUE) %>% 
+  select(-CI, -df_error) %>% 
+  kable()
+```
+
+likelihood ratio test comparing this model to a null model: 
+
+```{r}
+null_model <- logistf(Correctness ~ 1, data = test_data, family = "binomial")
+lrt <- anova(null_model, modality_model)
+tribble(~"Chi-Squared", ~DF, ~"p-Value", lrt$chisq, lrt$df, lrt$pval) %>% 
+  kable()
+```
+
+### Table 2
+
+```{r}
+(pic.firth <- test_data %>% 
+  mutate(Modality = fct_relevel(Modality, c("Pic", "Lex", "3D"))) %>% 
+    logistf(Correctness ~ Modality, data = ., family = "binomial") %>% 
+    parameters(exponentiate = TRUE)) %>% 
+  select(-CI, -df_error) %>% 
+  kable()
+```
+
+## 2.1.4.	Accuracy over Time
+
+```{r}
+test_data %>% 
+  group_by(Modality) %>% 
+  mutate(TTN = 1:n()) %>%
+  nest() %>% 
+  ungroup() %>% 
+  rename(DF = data) %>% 
+  mutate(GLM = map(DF, ~ glm(Correctness ~ TTN, data = .x, family = "binomial"))) %>% 
+  mutate(GLM = map(GLM, parameters, exponentiate = TRUE)) %>% 
+  unnest(GLM) %>% 
+  select(-DF, -CI, -df_error) %>% 
+  kable(digits = 5)
+```
+
+### Figure 9
+
+```{r}
+p1 <- test_data %>% 
+  group_by(Modality) %>%
+  mutate(TTN = 1:n()) %>% 
+  ungroup() %>% 
+  filter(Modality == "Lex") %>%
+  mutate(Correctness = as.numeric(Correctness)) %>%
+  mutate(Correctness_ = slide_mean(Correctness, before = Inf)) %>% 
+  ggplot(aes(x = TTN, y = Correctness_ )) + 
+  geom_line(color = "blue") +
+  geom_point(aes(x = TTN, y = Correctness), color = "black", size = 1.5, shape = 1) +
+  xlab("Total Trial Number (Lexigram)") +
+  ylab("Accuracy") +
+  ylim(0, 1) +
+  theme_update(plot.title = element_text(hjust = 0.5))
+
+p2 <- test_data %>% 
+  group_by(Modality) %>%
+  mutate(TTN = 1:n()) %>% 
+  ungroup() %>% 
+  filter(Modality == "3D") %>%
+  mutate(Correctness = as.numeric(Correctness)) %>%
+  mutate(Correctness_ = slide_mean(Correctness, before = Inf)) %>%
+  ggplot(aes(x = TTN, y = Correctness_ )) + 
+  geom_line(color = "blue") +
+  geom_point(aes(x = TTN, y = Correctness), color = "black", size = 1.5, shape = 1) +
+  xlab("Total Trial Number (3D-Object)") +
+  ylab("Accuracy") +
+  ylim(0, 1) +
+  theme_update(plot.title = element_text(hjust = 0.5))
+
+p1 + p2
+```
+
+## 2.1.5.	Latency over Time 
+
+```{r}
+test_data %>% 
+  group_by(Modality) %>% 
+  mutate(TTN = 1:n()) %>%
+  ungroup() %>% 
+  mutate(Correctness = as.numeric(Correctness)) %>% 
+  filter(Correctness > 0) %>% 
+  group_by(Modality) %>% 
+  nest() %>% 
+  ungroup() %>% 
+  rename(DF = data) %>% 
+  mutate(LM = map(DF, ~ lm(Seconds ~ TTN, data = .x))) %>% 
+  mutate(LM = map(LM, parameters)) %>% 
+  unnest(LM) %>% 
+  select(-DF, -df_error, -CI) %>% 
+  kable()
+```
+
+### Figure 10
+
+```{r}
+test_data %>% 
+  group_by(Modality) %>% 
+  mutate(TTN = 1:n()) %>%
+  ungroup() %>%
+  mutate(Correctness = as.numeric(Correctness)) %>% 
+  filter(Correctness > 0) %>% 
+  mutate(Modality = case_when(
+    Modality == "Lex" ~ "Lexigram",
+    Modality == "Pic" ~ "Photo",
+    Modality == "3D" ~ "3D-Object"
+  )) %>%
+  mutate(Modality = fct_relevel(Modality, c("Lexigram", "Photo", "3D-Object"))) %>% 
+  ggplot(aes(TTN, Seconds, color = Modality)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  xlab("Total Trial Number") +
+  ylim(0, 9)
+```
+
+# Experiment 2
+
+```{r}
+set.seed(2021-05-06)
+
+test_data <- read_csv(here("exp2_test_data.csv")) %>% 
+  mutate(Modality = fct_relevel(Modality, c("Lex", "Pic", "3D")))
+```
+
+## 2.2.1.	Overall Accuracy
+
+```{r}
+plot_data <- test_data %>% 
+  group_by(Modality) %>% 
+  nest() %>% 
+  ungroup() %>% 
+  rename(DF = data) %>% 
+  mutate(binom_test = map(DF, ~ binom.test(sum(.x$Correctness), length(.x$Correctness)))) %>% 
+  mutate(binom_test = map(binom_test, tidy)) %>% 
+  unnest(binom_test) %>% 
+  select(-DF, -method, -alternative, -statistic, -parameter)
+
+ex1ex2binom[[2]] <- plot_data %>% 
+  mutate(Experiment = 2)
+
+ex1ex2binom <- ex1ex2binom %>% bind_rows()
+
+plot_data %>% kable()
+```
+
+### Figure 11
+
+```{r}
+plot_data %>% 
+  rename(Accuracy = estimate) %>% 
+  ggplot(aes(Modality, Accuracy)) +
+  geom_col(fill =  scales::hue_pal()(3)) + 
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = .25)
+```
+
+## 2.2.2.	First Trial Accuracy
+
+```{r}
+fts <- read_xlsx(here("first-trial-success-exp-2.xlsx")) 
+
+fts1_tbl <- tribble(
+  ~Correct, ~Total, ~"p-Value",
+  fts %>% 
+    slice(1:6) %>%
+    pull(Correctness) %>% sum(), 
+  fts %>% 
+    slice(1:6) %>%
+    pull(Correctness) %>% 
+    length(),
+  fts %>% 
+    slice(1:6) %>%
+    pull(Correctness) %>% 
+    {binom.test(sum(.), length(.))} %>% 
+    .$p.value
+)
+
+fts2_tbl <- tribble(
+  ~Correct, ~Total, ~"p-Value",
+  fts %>% 
+    pull(Correctness) %>% sum(), 
+  fts %>% 
+    pull(Correctness) %>% length(),
+  fts %>% 
+    pull(Correctness) %>% 
+    {binom.test(sum(.), length(.))} %>% 
+    .$p.value
+)
+```
+
+first-trial accuracy for each first pair exposure:
+
+```{r}
+fts1_tbl %>% kable()
+```
+
+first trial accuracy for each matching word:
+
+```{r}
+fts2_tbl %>% kable()
+```
+
+## 2.2.3.	Accuracy Compared Across Conditions
+
+### Table 3
+
+```{r}
+(modality_model <- glm(Correctness ~ Modality, data = test_data, family = "binomial")) %>% 
+  parameters(exponentiate = TRUE) %>% 
+  select(-CI, -df_error) %>% 
+  kable()
+```
+
+likelihood ratio test comparing this model to a null model: 
+
+```{r}
+null_model <- glm(Correctness ~ 1, data = test_data, family = "binomial")
+lrt <- anova(null_model, modality_model, test = "LRT")
+tribble(~"Chi-Squared", ~DF, ~"p-Value", lrt$Deviance[2], lrt$Df[2], lrt$`Pr(>Chi)`[2]) %>% 
+  kable()
+```
+
+### Table 4
+
+```{r}
+(pic_exp2 <- test_data %>% 
+  mutate(Modality = fct_relevel(Modality, c("Pic", "Lex", "3D"))) %>% 
+    glm(Correctness ~ Modality, data = ., family = "binomial") %>% 
+    parameters(exponentiate = TRUE)) %>% 
+  select(-CI, -df_error) %>% 
+  kable()
+```
+
+## 2.2.4.	Accuracy Over Time
+
+```{r}
+test_data %>% 
+  group_by(Modality) %>% 
+  mutate(TTN = 1:n()) %>%
+  nest() %>% 
+  ungroup() %>% 
+  rename(DF = data) %>% 
+  mutate(GLM = map(DF, ~ glm(Correctness ~ TTN, data = .x, family = "binomial"))) %>% 
+  mutate(GLM = map(GLM, parameters, exponentiate = TRUE)) %>% 
+  unnest(GLM) %>% 
+  select(-DF) %>% 
+  select(-CI, -df_error) %>% 
+  kable(digits = 5)
+```
+
+### Figure 12
+
+```{r}
+p1 <- test_data %>% 
+  group_by(Modality) %>%
+  mutate(TTN = 1:n()) %>% 
+  ungroup() %>% 
+  filter(Modality == "Lex") %>%
+  mutate(Correctness = as.numeric(Correctness)) %>%
+  mutate(Correctness_ = slide_mean(Correctness, before = Inf)) %>% 
+  ggplot(aes(x = TTN, y = Correctness_ )) + 
+  geom_line(color = "blue") +
+  geom_point(aes(x = TTN, y = Correctness), color = "black", size = 1.5, shape = 1) +
+  xlab("Total Trial Number (Lexigram)") +
+  ylab("Accuracy") +
+  ylim(0, 1) +
+  theme_update(plot.title = element_text(hjust = 0.5))
+
+p2 <- test_data %>% 
+  group_by(Modality) %>%
+  mutate(TTN = 1:n()) %>% 
+  ungroup() %>% 
+  filter(Modality == "Pic") %>%
+  mutate(Correctness = as.numeric(Correctness)) %>%
+  mutate(Correctness_ = slide_mean(Correctness, before = Inf)) %>%
+  ggplot(aes(x = TTN, y = Correctness_ )) + 
+  geom_line(color = "blue") +
+  geom_point(aes(x = TTN, y = Correctness), color = "black", size = 1.5, shape = 1) +
+  xlab("Total Trial Number (Photo)") +
+  ylab("Accuracy") +
+  ylim(0, 1) +
+  theme_update(plot.title = element_text(hjust = 0.5))
+
+p3 <- test_data %>% 
+  group_by(Modality) %>%
+  mutate(TTN = 1:n()) %>% 
+  ungroup() %>% 
+  filter(Modality == "3D") %>%
+  mutate(Correctness = as.numeric(Correctness)) %>%
+  mutate(Correctness_ = slide_mean(Correctness, before = Inf)) %>%
+  ggplot(aes(x = TTN, y = Correctness_ )) + 
+  geom_line(color = "blue") +
+  geom_point(aes(x = TTN, y = Correctness), color = "black", size = 1.5, shape = 1) +
+  xlab("Total Trial Number (3D-Object)") +
+  ylab("Accuracy") +
+  ylim(0, 1) +
+  theme_update(plot.title = element_text(hjust = 0.5))
+
+
+p4 <- ggplot() + theme_void() 
+
+(p2 + p3) /
+(p1 + p4)
+```
+
+## 2.2.5.	Latency Over Time
+
+```{r}
+test_data %>% 
+  group_by(Modality) %>% 
+  mutate(TTN = 1:n()) %>%
+  ungroup() %>% 
+  mutate(Correctness = as.numeric(Correctness)) %>% 
+  filter(Correctness > 0) %>% 
+  group_by(Modality) %>% 
+  nest() %>% 
+  ungroup() %>% 
+  rename(DF = data) %>% 
+  mutate(LM = map(DF, ~ lm(Seconds ~ TTN, data = .x))) %>% 
+  mutate(LM = map(LM, parameters)) %>% 
+  unnest(LM) %>% 
+  select(-DF, -df_error, -CI) %>% 
+  kable()
+```
+
+### Figure 13
+
+```{r}
+test_data %>% 
+  group_by(Modality) %>% 
+  mutate(TTN = 1:n()) %>%
+  ungroup() %>%
+  mutate(Correctness = as.numeric(Correctness)) %>% 
+  filter(Correctness > 0) %>% 
+  mutate(Modality = case_when(
+    Modality == "Lex" ~ "Lexigram",
+    Modality == "Pic" ~ "Photo",
+    Modality == "3D" ~ "3D-Object"
+  )) %>%
+  mutate(Modality = fct_relevel(Modality, c("Lexigram", "Photo", "3D-Object"))) %>% 
+  ggplot(aes(TTN, Seconds, color = Modality)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  xlab("Total Trial Number") +
+  ylim(0, 9)
+```
+
+# 2.3. Comparison of Experiment 1 and Experiment 2 Accuracy
+
+```{r}
+ex1ex2binom %>% 
+  mutate(Experiment = as.character(Experiment)) %>% 
+  mutate(Modality = case_when(
+    Modality == "Lex" ~ "Lexigram",
+    Modality == "Pic" ~ "Photo",
+    Modality == "3D" ~ "3D-Object"
+  )) %>%
+  mutate(Modality = fct_relevel(Modality, c("Lexigram", "Photo", "3D-Object"))) %>% 
+  ggplot(aes(fct_inorder(Modality), estimate, fill = Experiment)) +
+  geom_bar(position = "dodge", stat="identity") +
+  labs(x = "Modality", y = "Accuracy") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  geom_hline(yintercept = 0.50, linetype = 2, size = 0.75)
+```
+
+\newpage
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
